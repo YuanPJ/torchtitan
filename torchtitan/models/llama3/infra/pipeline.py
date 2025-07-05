@@ -31,6 +31,28 @@ from torchtitan.tools.logging import logger
 from ..model.args import TransformerModelArgs
 
 
+class WrappedPipelineStage(PipelineStage):
+    # Note: override forward_one_chunk because all inputs require grad when loss backward.
+    # https://github.com/pytorch/pytorch/blob/v2.7.1/torch/distributed/pipelining/stage.py#L679-L743
+    #
+    def forward_one_chunk(
+        self,
+        fwd_chunk_id: int,
+        args,
+        kwargs=None,
+    ):
+        output = super().forward_one_chunk(fwd_chunk_id, args, kwargs)
+
+        input_tensors_requires_grad = []
+        output_tuple, flatten_input_tensors = self.fwd_cache.pop(fwd_chunk_id)
+        for input_tensor in flatten_input_tensors:
+            if input_tensor.requires_grad:
+                input_tensors_requires_grad.append(input_tensor)
+        self.fwd_cache[fwd_chunk_id] = (output_tuple, input_tensors_requires_grad)
+
+        return output
+
+
 def pipeline_llama(
     model: nn.Module,
     world_mesh: DeviceMesh,
@@ -124,7 +146,7 @@ def pipeline_llama_manual_split(
             model.norm = None
             model.output = None
 
-        stage = PipelineStage(
+        stage = WrappedPipelineStage(
             model,
             stage_idx,
             num_stages,
