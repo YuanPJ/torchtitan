@@ -12,6 +12,7 @@ from torch.distributed.pipelining.schedules import (
     get_schedule_class,
     PipelineScheduleMulti,
     PipelineScheduleSingle,
+    ScheduleZBVZeroBubble,
 )
 from torch.distributed.pipelining.stage import PipelineStage
 
@@ -166,10 +167,22 @@ def build_pipeline_schedule(
             f"of stages ({num_total_stages}) which may result in a bubble in the pipeline."
         )
 
+    stage_index_to_group_rank = None
+    if schedule_class == ScheduleZBVZeroBubble:
+        stage_index_to_group_rank = {}
+        for stage_idx in range(stages[0].num_stages):
+            if stage_idx < stages[0].num_stages // 2:
+                stage_index_to_group_rank[stage_idx] = stage_idx
+            else:
+                stage_index_to_group_rank[stage_idx] = (
+                    stages[0].num_stages - 1 - stage_idx
+                )
+
     schedule = schedule_class(
         stages if looped_schedule else stages[0],
         n_microbatches=n_microbatches,
         loss_fn=loss_fn,
+        stage_index_to_group_rank=stage_index_to_group_rank,
     )
     logger.info(
         f"Using pipeline schedule {job_config.parallelism.pipeline_parallel_schedule} "
